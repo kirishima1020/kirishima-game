@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>キリシマ - ローカル2人対戦</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <header>
+    <h1>キリシマ</h1>
+    <div class="controls">
+      <button id="restartBtn">リスタート</button>
+      <label>
+        盤サイズ:
+        <select id="gridSizeSelect">
+          <option value="9" selected>9×9</option>
+          <option value="7">7×7</option>
+          <option value="11">11×11</option>
+        </select>
+      </label>
+    </div>
+    <div class="status">
+      <div id="turnInfo">先手: P1</div>
+      <div id="scoreInfo">P1: 0　|　P2: 0</div>
+      <div id="hint">線をクリックして引く。閉じたら即塗り確定。</div>
+    </div>
+  </header>
+
+  <main>
+    <canvas id="board" width="720" height="720" aria-label="キリシマ盤面"></canvas>
+  </main>
+
+  <footer>
+    <small>
+      ルール要点：最初の1手のみ任意。以降は自分の線と同じ格子点を共有する場所からのみ延伸可。既存の線は使えない。
+      斜め線なし。閉じ領域は直ちにその手番プレイヤーの色で塗られ確定（塗替え不可）。
+      パスなし。現在手番が一切打てない場合はゲーム終了。
+    </small>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
