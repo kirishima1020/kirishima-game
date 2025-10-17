@@ -1,5 +1,6 @@
 # キリシマ
 格子上に線を引いて領土を奪い合う新型ボードゲーム。  
+https://kirishima1020.github.io/kirishima-game/
 
 ## 遊び方
 - 最初の1手はどこでも線を引ける。
