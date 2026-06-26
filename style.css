@@ -31,6 +31,7 @@ h1 {
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
   margin-bottom: 8px;
@@ -51,6 +52,7 @@ button:hover, select:hover {
 
 .status {
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   align-items: center;
   padding: 8px 0 12px;
@@ -72,7 +74,9 @@ canvas {
   background: #0f1115;
   border: 1px solid #232a31;
   border-radius: 12px;
-  touch-action: manipulation;
+  touch-action: none;   /* 盤上のドラッグで線を狙うのでスクロール/ズームを抑止 */
+  max-width: 100%;       /* 狭い画面で横はみ出しせず縮小（縦横比は維持） */
+  height: auto;
 }
 
 footer {
