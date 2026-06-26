@@ -257,6 +257,8 @@
 
   // このエッジが「自分の既存線と同じ格子点を共有する」条件を満たすか
   function isEdgeExtensionValid(edge, player) {
+    // 確定した面の中には線を引けない（両者同じ）。確定面は solid で内部に辺が無い
+    if (edgeInsideFinalizedFace(edge)) return false;
     // 最初の1手は無条件OK
     if (!firstPlaced[player]) return true;
 
@@ -288,6 +290,20 @@
     // 下垂直
     if (iy < N - 1 && V[iy][ix] === player) return true;
     return false;
+  }
+
+  // このエッジが確定面の内部かどうか。両隣のマスが確定済みなら solid な面の中＝誰も引けない
+  function edgeInsideFinalizedFace(edge) {
+    const M = N - 1;
+    const adj = [];
+    if (edge.type === 'H') {
+      if (edge.y >= 1) adj.push([edge.x, edge.y - 1]);
+      if (edge.y < M) adj.push([edge.x, edge.y]);
+    } else {
+      if (edge.x >= 1) adj.push([edge.x - 1, edge.y]);
+      if (edge.x < M) adj.push([edge.x, edge.y]);
+    }
+    return adj.length === 2 && adj.every(([cx, cy]) => cells[cy][cx] !== 0);
   }
 
   // エッジを置く
@@ -434,30 +450,29 @@
     return false;
   }
 
-  function endGameIfNoMove() {
-    // 現在手番が動けない場合は即終了（パス禁止のため）
-    if (!hasAnyMoveFor(turn)) {
-      gameOver = true;
-      // 最終計算：塗りマス合計は score に反映済み。
-      const totalCells = (N - 1) * (N - 1);
-      const p1 = score[1], p2 = score[2];
-      let result = '';
-      if (p1 > p2) result = 'P1 の勝ち';
-      else if (p2 > p1) result = 'P2 の勝ち';
-      else result = '引き分け';
-      notice = `終了｜${result}（全${totalCells}中 P1:${p1} P2:${p2}）`;
-      updateStatus();
-      draw();
-      return true;
-    }
-    return false;
+  function finishGame() {
+    gameOver = true;
+    // 最終計算：塗りマス合計は score に反映済み。
+    const totalCells = (N - 1) * (N - 1);
+    const p1 = score[1], p2 = score[2];
+    const result = p1 > p2 ? 'P1 の勝ち' : p2 > p1 ? 'P2 の勝ち' : '引き分け';
+    notice = `終了｜${result}（全${totalCells}中 P1:${p1} P2:${p2}）`;
+    updateStatus();
+    draw();
   }
 
   function nextTurn() {
-    turn = (turn === 1 ? 2 : 1);
+    // 両者が打てなくなるまで継続。合法手ゼロの側だけ強制スキップ（自発パスは無し）
+    const other = turn === 1 ? 2 : 1;
+    if (hasAnyMoveFor(other)) {
+      turn = other;            // 通常：相手へ手番を渡す
+    } else if (hasAnyMoveFor(turn)) {
+      // 相手は詰み→スキップ。自分はまだ打てるので手番を続行（turn 据え置き）
+    } else {
+      finishGame();            // 両者詰み→終了
+      return;
+    }
     updateStatus();
-    // パス禁止：次手番が動けないならその場で終了
-    endGameIfNoMove();
   }
 
   // 入力（マウス／タッチ統一：Pointer Events）
