@@ -53,6 +53,9 @@
   // ゲーム終了フラグ
   let gameOver = false;
 
+  // 直近イベントの表示（獲得マス・終了メッセージ）。手番をまたいでも残す
+  let notice = '';
+
   function initBoard() {
     const size = Math.min(canvas.width, canvas.height);
     margin = 36;
@@ -68,17 +71,18 @@
     turn = 1;
     score = [0, 0, 0];
     gameOver = false;
+    notice = '';
     hoverEdge = null;
 
     updateStatus();
     draw();
   }
 
-  function updateStatus(msg = '') {
+  function updateStatus() {
     turnInfo.textContent = gameOver
       ? 'ゲーム終了'
       : `手番: ${turn === 1 ? 'P1' : 'P2'}`;
-    scoreInfo.textContent = `P1: ${score[1]}　|　P2: ${score[2]}${msg ? '　' + msg : ''}`;
+    scoreInfo.textContent = `P1: ${score[1]}　|　P2: ${score[2]}${notice ? '　' + notice : ''}`;
   }
 
   function gridToXY(ix, iy) {
@@ -95,8 +99,6 @@
       for (let x = 0; x < cellCount; x++) {
         if (cells[y][x] !== 0) {
           const [x0, y0] = gridToXY(x, y);
-          ctx.fillStyle = (cells[y][x] === 1 ? COLORS.p1 : COLORS.p2) + Math.floor(COLORS.cellAlpha * 255).toString(16).padStart(2, '0');
-          // 上の色式は16進透明度付きの意図だが、Canvasは別指定が自然
           ctx.fillStyle = cells[y][x] === 1 ? `rgba(61,165,255,${COLORS.cellAlpha})` : `rgba(255,93,105,${COLORS.cellAlpha})`;
           ctx.fillRect(x0, y0, spacing, spacing);
         }
@@ -255,6 +257,8 @@
 
   // このエッジが「自分の既存線と同じ格子点を共有する」条件を満たすか
   function isEdgeExtensionValid(edge, player) {
+    // 確定した面の中には線を引けない（両者同じ）。確定面は solid で内部に辺が無い
+    if (edgeInsideFinalizedFace(edge)) return false;
     // 最初の1手は無条件OK
     if (!firstPlaced[player]) return true;
 
@@ -288,6 +292,20 @@
     return false;
   }
 
+  // このエッジが確定面の内部かどうか。両隣のマスが確定済みなら solid な面の中＝誰も引けない
+  function edgeInsideFinalizedFace(edge) {
+    const M = N - 1;
+    const adj = [];
+    if (edge.type === 'H') {
+      if (edge.y >= 1) adj.push([edge.x, edge.y - 1]);
+      if (edge.y < M) adj.push([edge.x, edge.y]);
+    } else {
+      if (edge.x >= 1) adj.push([edge.x - 1, edge.y]);
+      if (edge.x < M) adj.push([edge.x, edge.y]);
+    }
+    return adj.length === 2 && adj.every(([cx, cy]) => cells[cy][cx] !== 0);
+  }
+
   // エッジを置く
   function placeEdge(edge, player) {
     if (edge.type === 'H') H[edge.y][edge.x] = player;
@@ -299,7 +317,9 @@
     if (newly > 0) {
       score[player] += newly;
     }
-    updateStatus(newly > 0 ? `+${newly}` : '');
+    // 獲得表示は次手番の updateStatus に上書きされないよう notice に持たせる
+    notice = newly > 0 ? `P${player} +${newly}` : '';
+    updateStatus();
   }
 
   // 閉鎖領域を探索して塗る
@@ -430,67 +450,79 @@
     return false;
   }
 
-  function endGameIfNoMove() {
-    // 現在手番が動けない場合は即終了（パス禁止のため）
-    if (!hasAnyMoveFor(turn)) {
-      gameOver = true;
-      // 最終計算：塗りマス合計は score に反映済み。
-      const totalCells = (N - 1) * (N - 1);
-      const p1 = score[1], p2 = score[2];
-      let result = '';
-      if (p1 > p2) result = 'P1 の勝ち';
-      else if (p2 > p1) result = 'P2 の勝ち';
-      else result = '引き分け';
-      updateStatus(`終了｜${result}（全${totalCells}中 P1:${p1} P2:${p2}）`);
-      draw();
-      return true;
-    }
-    return false;
+  function finishGame() {
+    gameOver = true;
+    // 最終計算：塗りマス合計は score に反映済み。
+    const totalCells = (N - 1) * (N - 1);
+    const p1 = score[1], p2 = score[2];
+    const result = p1 > p2 ? 'P1 の勝ち' : p2 > p1 ? 'P2 の勝ち' : '引き分け';
+    notice = `終了｜${result}（全${totalCells}中 P1:${p1} P2:${p2}）`;
+    updateStatus();
+    draw();
   }
 
   function nextTurn() {
-    turn = (turn === 1 ? 2 : 1);
+    // 両者が打てなくなるまで継続。合法手ゼロの側だけ強制スキップ（自発パスは無し）
+    const other = turn === 1 ? 2 : 1;
+    if (hasAnyMoveFor(other)) {
+      turn = other;            // 通常：相手へ手番を渡す
+    } else if (hasAnyMoveFor(turn)) {
+      // 相手は詰み→スキップ。自分はまだ打てるので手番を続行（turn 据え置き）
+    } else {
+      finishGame();            // 両者詰み→終了
+      return;
+    }
     updateStatus();
-    // パス禁止：次手番が動けないならその場で終了
-    endGameIfNoMove();
   }
 
-  // イベント設定
-  canvas.addEventListener('mousemove', (e) => {
-    if (gameOver) return (hoverEdge = null, draw());
+  // 入力（マウス／タッチ統一：Pointer Events）
+  // タッチはホバーが無いので「押す→プレビュー→指を滑らせて狙う→離して確定」。
+  // マウスは従来通り、移動でプレビュー・離して確定。
+  function pointerPos(e) {
     const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+    return [
+      (e.clientX - rect.left) * (canvas.width / rect.width),
+      (e.clientY - rect.top) * (canvas.height / rect.height),
+    ];
+  }
+
+  function previewAt(mx, my) {
+    const picked = pickEdge(mx, my);
+    hoverEdge = (picked && isEdgeExtensionValid(picked, turn)) ? picked : null;
+    draw();
+  }
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (gameOver) { hoverEdge = null; return draw(); }
+    const [mx, my] = pointerPos(e);
+    previewAt(mx, my);
+  });
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (gameOver) return;
+    e.preventDefault();
+    const [mx, my] = pointerPos(e);
+    previewAt(mx, my);
+  });
+
+  canvas.addEventListener('pointerup', (e) => {
+    if (gameOver) return;
+    const [mx, my] = pointerPos(e);
     const picked = pickEdge(mx, my);
     if (picked && isEdgeExtensionValid(picked, turn)) {
-      hoverEdge = picked;
+      // 配置→塗り→ターン移行（手番が打てないなら終了）
+      placeEdge(picked, turn);
+      hoverEdge = null;
+      draw();
+      if (!gameOver) nextTurn();
     } else {
       hoverEdge = null;
+      draw();
     }
-    draw();
   });
 
-  canvas.addEventListener('mouseleave', () => {
-    hoverEdge = null;
-    draw();
-  });
-
-  canvas.addEventListener('click', (e) => {
-    if (gameOver) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const my = (e.clientY - rect.top) * (canvas.height / rect.height);
-    const picked = pickEdge(mx, my);
-    if (!picked) return;
-
-    if (!isEdgeExtensionValid(picked, turn)) return;
-
-    // 配置→塗り→ターン移行（手番が打てないなら終了）
-    placeEdge(picked, turn);
-    draw();
-
-    if (!gameOver) nextTurn();
-  });
+  canvas.addEventListener('pointerleave', () => { hoverEdge = null; draw(); });
+  canvas.addEventListener('pointercancel', () => { hoverEdge = null; draw(); });
 
   restartBtn.addEventListener('click', () => {
     initBoard();
