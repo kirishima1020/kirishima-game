@@ -73,7 +73,7 @@
 const E = window.KirishimaEngine;
 const PAL = ['', '#3da5ff','#ff5d69','#ffd23d','#4dd964'];
 const $ = id => document.getElementById(id);
-const ENDPOINT = localStorage.getItem('kirishima_endpoint') || '';   // VPS受け口URL（設定後に集約）。未設定なら端末内のみ。
+const ENDPOINT = localStorage.getItem('kirishima_endpoint') || 'https://160-251-175-23.sslip.io/ingest';   // VPS受け口。localStorageで上書き可。
 const SESSION  = (()=>{ let s=localStorage.getItem('kirishima_session'); if(!s){ s=(crypto.randomUUID?crypto.randomUUID():'s'+Math.random().toString(36).slice(2)); localStorage.setItem('kirishima_session',s);} return s; })();
 
 let N, P, M, mode, aiIters, aiSeats, s, log, legalNow, hoverKey=null, aiThinking=false, over=true;
