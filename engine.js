@@ -71,13 +71,15 @@ function advance(s){const P=s.P;for(let k=1;k<=P;k++){const np=((s.turn-1+k)%P)+
 function play(s,id,p){const hc=HC(s.N);if(id<hc)s.H[id]=p;else s.V[id-hc]=p;s.first[p]=1;const g=fill(s,p);s.score[p]+=g;s.moves++;advance(s);return g;}
 
 const C=Math.SQRT2;
-// smart=true: プレイアウト中、捕獲できる手があれば（サンプルから）最大総取りを選ぶ。
+// 終局のスコアを「勝敗」ベクトルに（勝者=1・同点は分配・敗者=0）。「過半取れば勝ち」を探索の目標に。
+function winVec(s){const r=new Float64Array(s.P+1);let mx=-1,mc=0;for(let i=1;i<=s.P;i++){if(s.score[i]>mx){mx=s.score[i];mc=1;}else if(s.score[i]===mx)mc++;}for(let i=1;i<=s.P;i++)r[i]=s.score[i]===mx?1/mc:0;return r;}
+// smart=true: プレイアウト中、捕獲できる手があれば（サンプルから）最大総取りを選ぶ。返り値は勝敗。
 function rollout(s0,cells,smart){const s=clone(s0);while(s.turn!==0){const n=legal(s,s.turn,_buf);if(!n){advance(s);continue;}let mv;
     if(smart){const K=n<14?n:14;let bg=0,bid=-1;for(let i=0;i<K;i++){const id=_buf[(_rng()*n)|0];const g=captureGain(s,id);if(g>bg){bg=g;bid=id;}}mv=bg>0?bid:_buf[(_rng()*n)|0];}
     else mv=_buf[(_rng()*n)|0];
     play(s,mv,s.turn);}
-  const r=new Float64Array(s.P+1);for(let i=1;i<=s.P;i++)r[i]=s.score[i]/cells;return r;}
-function term(s,cells){const r=new Float64Array(s.P+1);for(let i=1;i<=s.P;i++)r[i]=s.score[i]/cells;return r;}
+  return winVec(s);}
+function term(s,cells){return winVec(s);}
 function node(s){const nd={s,m:-1,n:0,W:new Float64Array(s.P+1),c:[],u:[]};if(s.turn!==0){const k=legal(s,s.turn,_buf);for(let i=0;i<k;i++)nd.u.push(_buf[i]);}return nd;}
 function sel(nd){const tm=nd.s.turn,ln=Math.log(nd.n+1);let b=null,bu=-1e9;for(const ch of nd.c){const u=ch.W[tm]/ch.n+C*Math.sqrt(ln/ch.n);if(u>bu){bu=u;b=ch;}}return b;}
 function best(root,iters,smart,useValue){const P=root.P,cells=root.M*root.M;const rt=node(clone(root));for(let it=0;it<iters;it++){let nd=rt;const path=[nd];while(nd.u.length===0&&nd.c.length>0){nd=sel(nd);path.push(nd);}if(nd.u.length>0&&nd.s.turn!==0){const id=nd.u.pop();const ns=clone(nd.s);play(ns,id,nd.s.turn);const ch=node(ns);ch.m=id;nd.c.push(ch);path.push(ch);nd=ch;}const r=nd.s.turn===0?term(nd.s,cells):(useValue?valueEval(nd.s,cells):rollout(nd.s,cells,smart));for(const x of path){x.n++;for(let p=1;p<=P;p++)x.W[p]+=r[p];}}
