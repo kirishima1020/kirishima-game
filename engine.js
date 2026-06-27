@@ -56,14 +56,15 @@ function territory(s){const M=s.M,N=s.N,H=s.H,V=s.V,c=s.cells,P=s.P;const comp=n
     let mo=0,mp=0;for(let p=1;p<=P;p++)if(owner[p]>mo){mo=owner[p];mp=p;}if(mp>0)terr[mp]+=sz;}
   return terr;}
 
-// 学習済み価値（リッジ回帰）。[bias,自score,相手score,自前線,相手前線,自領地,相手領地,進行率]。2人戦。
-const VW=[0.663779,0.283431,-0.821661,0.218956,-0.387254,-0.034491,-0.252888,0.138229];
+// 学習済み価値（ロジスティック回帰・目標=勝敗 P(win)）。「過半を取れば勝ち」を焼くため share でなく勝敗を学習。
+// [bias,自score,相手score,自前線,相手前線,自領地,相手領地,進行率]。2人戦。
+const VW=[0.210148,2.926297,-2.649967,0.51957,-0.541604,0.744403,-1.253029,0.483282];
 function valueEval(s,cells){const r=new Float64Array(s.P+1);
   if(s.P!==2){let tot=0;for(let i=1;i<=s.P;i++)tot+=s.score[i];tot=tot||1;for(let i=1;i<=s.P;i++)r[i]=s.score[i]/tot;return r;}
   const E=EC(s.N),tr=territory(s),prog=s.moves/(2*cells);
   for(let i=1;i<=2;i++){const j=i===1?2:1;
-    let v=VW[0]+VW[1]*(s.score[i]/cells)+VW[2]*(s.score[j]/cells)+VW[3]*(legal(s,i,_vbuf)/E)+VW[4]*(legal(s,j,_vbuf)/E)+VW[5]*(tr[i]/cells)+VW[6]*(tr[j]/cells)+VW[7]*prog;
-    r[i]=v<0?0:v>1?1:v;}
+    const v=VW[0]+VW[1]*(s.score[i]/cells)+VW[2]*(s.score[j]/cells)+VW[3]*(legal(s,i,_vbuf)/E)+VW[4]*(legal(s,j,_vbuf)/E)+VW[5]*(tr[i]/cells)+VW[6]*(tr[j]/cells)+VW[7]*prog;
+    r[i]=1/(1+Math.exp(-v));}   // sigmoid → P(win)
   return r;}
 
 function advance(s){const P=s.P;for(let k=1;k<=P;k++){const np=((s.turn-1+k)%P)+1;if(hasMove(s,np)){s.turn=np;return;}}s.turn=0;}
@@ -79,7 +80,8 @@ function rollout(s0,cells,smart){const s=clone(s0);while(s.turn!==0){const n=leg
 function term(s,cells){const r=new Float64Array(s.P+1);for(let i=1;i<=s.P;i++)r[i]=s.score[i]/cells;return r;}
 function node(s){const nd={s,m:-1,n:0,W:new Float64Array(s.P+1),c:[],u:[]};if(s.turn!==0){const k=legal(s,s.turn,_buf);for(let i=0;i<k;i++)nd.u.push(_buf[i]);}return nd;}
 function sel(nd){const tm=nd.s.turn,ln=Math.log(nd.n+1);let b=null,bu=-1e9;for(const ch of nd.c){const u=ch.W[tm]/ch.n+C*Math.sqrt(ln/ch.n);if(u>bu){bu=u;b=ch;}}return b;}
-function best(root,iters,smart,useValue){const P=root.P,cells=root.M*root.M;const rt=node(clone(root));for(let it=0;it<iters;it++){let nd=rt;const path=[nd];while(nd.u.length===0&&nd.c.length>0){nd=sel(nd);path.push(nd);}if(nd.u.length>0&&nd.s.turn!==0){const id=nd.u.pop();const ns=clone(nd.s);play(ns,id,nd.s.turn);const ch=node(ns);ch.m=id;nd.c.push(ch);path.push(ch);nd=ch;}const r=nd.s.turn===0?term(nd.s,cells):(useValue?valueEval(nd.s,cells):rollout(nd.s,cells,smart));for(const x of path){x.n++;for(let p=1;p<=P;p++)x.W[p]+=r[p];}}let bm=-1,bv=-1;for(const ch of rt.c)if(ch.n>bv){bv=ch.n;bm=ch.m;}return bm;}
+function best(root,iters,smart,useValue){const P=root.P,cells=root.M*root.M;const rt=node(clone(root));for(let it=0;it<iters;it++){let nd=rt;const path=[nd];while(nd.u.length===0&&nd.c.length>0){nd=sel(nd);path.push(nd);}if(nd.u.length>0&&nd.s.turn!==0){const id=nd.u.pop();const ns=clone(nd.s);play(ns,id,nd.s.turn);const ch=node(ns);ch.m=id;nd.c.push(ch);path.push(ch);nd=ch;}const r=nd.s.turn===0?term(nd.s,cells):(useValue?valueEval(nd.s,cells):rollout(nd.s,cells,smart));for(const x of path){x.n++;for(let p=1;p<=P;p++)x.W[p]+=r[p];}}
+  let bv=-1;for(const ch of rt.c)if(ch.n>bv)bv=ch.n;const top=rt.c.filter(ch=>ch.n>=0.9*bv);return top.length?top[(_rng()*top.length)|0].m:-1;}  // 上位手から揺らぎ（決定的すぎ＝読まれ対策）
 
 // 辺id -> {type,x,y}（main.js / viewer の H[y][x]・V[y][x] 座標系）
 function edgeXY(N,id){const hc=N*(N-1);if(id<hc)return{type:'H',x:id%(N-1),y:(id/(N-1))|0};const v=id-hc;return{type:'V',x:v%N,y:(v/N)|0};}
