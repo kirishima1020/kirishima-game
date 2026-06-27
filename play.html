@@ -50,7 +50,7 @@
       </select>
     </label>
     <label class="ctl" id="aiWrap">AI強さ
-      <select id="iters"><option value="800">速い</option><option value="3000" selected>標準</option><option value="10000">強い</option></select>
+      <select id="iters"><option value="200">速い</option><option value="600" selected>標準</option><option value="1500">強い</option></select>
     </label>
     <button id="start" class="primary">開始</button>
   </div>
@@ -116,7 +116,7 @@ function applyMove(id, isHuman){
 
 function scheduleAI(){
   aiThinking = true; updateStatus();
-  setTimeout(()=>{ const mv = E.best(s, aiIters); aiThinking=false; applyMove(mv, false); }, 30);  // 30ms: 「考え中」を描画してから探索
+  setTimeout(()=>{ const mv = E.best(s, aiIters, true); aiThinking=false; applyMove(mv, false); }, 30);  // 30ms描画後に探索。true=捕獲認識ロールアウト(Stage0)
 }
 
 function endGame(){
