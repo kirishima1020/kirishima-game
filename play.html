@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>キリシマ</title>
+<style>
+  :root{
+    --bg:#0d0f12; --panel:#14181d; --fg:#e7e9ea; --muted:#9aa0a6; --line:#232a31;
+    --p1:#3da5ff; --p2:#ff5d69; --p3:#ffd23d; --p4:#4dd964;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Noto Sans JP",Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  header{padding:12px 16px 0}
+  h1{margin:0 0 8px;font-size:20px;letter-spacing:.1em}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  label.ctl{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+  button,select{background:#1b1f24;color:var(--fg);border:1px solid #2c333a;padding:7px 12px;border-radius:8px;cursor:pointer;font-size:14px}
+  button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+  button:hover,select:hover{border-color:#3a424b}
+  .status{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:10px 0 12px;color:var(--muted)}
+  #turn{color:var(--fg);font-weight:700}
+  #score{font-variant-numeric:tabular-nums}
+  #notice{color:var(--p3)}
+  main{display:grid;place-items:center;padding:6px 16px 18px}
+  canvas#board{background:#0f1115;border:1px solid var(--line);border-radius:12px;touch-action:none;max-width:100%;height:auto}
+  footer{padding:0 16px 18px;color:var(--muted);font-size:12px;line-height:1.6;max-width:680px}
+  footer .send{color:var(--fg)} .ok{color:var(--p4)} .warn{color:var(--p2)}
+</style>
+</head>
+<body>
+<header>
+  <h1>キリシマ</h1>
+  <div class="row">
+    <label class="ctl">モード
+      <select id="mode">
+        <option value="ai" selected>対AI（ソロ）</option>
+        <option value="hot">人vs人（同卓）</option>
+      </select>
+    </label>
+    <label class="ctl">人数
+      <select id="players"><option>2</option><option>3</option><option>4</option></select>
+    </label>
+    <label class="ctl">盤
+      <select id="size">
+        <option value="7">7×7（6×6マス）</option>
+        <option value="9" selected>9×9（8×8マス）</option>
+        <option value="11">11×11（10×10マス）</option>
+      </select>
+    </label>
+    <label class="ctl" id="aiWrap">AI強さ
+      <select id="iters"><option value="800">速い</option><option value="3000" selected>標準</option><option value="10000">強い</option></select>
+    </label>
+    <button id="start" class="primary">開始</button>
+  </div>
+  <div class="status">
+    <div id="turn">「開始」を押す</div>
+    <div id="score"></div>
+    <div id="notice"></div>
+  </div>
+</header>
+
+<main><canvas id="board" width="560" height="560" aria-label="キリシマ盤面"></canvas></main>
+
+<footer>
+  <div>1手＝隣り合う点を結ぶ1辺（縦横のみ）。初手だけ任意、以降は自分の線と繋がる点から延ばす（相手の線は使えない）。閉じた領域は閉じた人の色で確定し、確定面の中には引けない。打てない人は飛ばし、全員打てなくなったら塗りの多い人が勝ち。</div>
+  <div style="margin-top:8px" id="send" class="send">対局はAIの学習・評価のため匿名で記録されます。</div>
+</footer>
+
+<script src="engine.js"></script>
+<script>
+const E = window.KirishimaEngine;
+const PAL = ['', '#3da5ff','#ff5d69','#ffd23d','#4dd964'];
+const $ = id => document.getElementById(id);
+const ENDPOINT = localStorage.getItem('kirishima_endpoint') || '';   // VPS受け口URL（設定後に集約）。未設定なら端末内のみ。
+const SESSION  = (()=>{ let s=localStorage.getItem('kirishima_session'); if(!s){ s=(crypto.randomUUID?crypto.randomUUID():'s'+Math.random().toString(36).slice(2)); localStorage.setItem('kirishima_session',s);} return s; })();
+
+let N, P, M, mode, aiIters, aiSeats, s, log, legalNow, hoverKey=null, aiThinking=false, over=true;
+let margin, sp;
+
+function key(e){ return e.type + e.x + ',' + e.y; }
+function idOfEdge(e){ return e.type==='H' ? e.y*(N-1)+e.x : E.HC(N) + e.y*N + e.x; }
+function legalSet(){
+  const buf = new Int32Array(E.EC(N)); const n = E.legal(s, s.turn, buf); const map = new Map();
+  for(let i=0;i<n;i++){ const e = E.edgeXY(N, buf[i]); map.set(key(e), buf[i]); }
+  return map;
+}
+
+function start(){
+  N = +$('size').value; P = +$('players').value; M = N-1;
+  mode = $('mode').value; aiIters = +$('iters').value;
+  aiSeats = new Set(); if(mode==='ai'){ for(let p=2;p<=P;p++) aiSeats.add(p); }   // 人間=席1、残りAI
+  E.ensure(N); s = E.makeGame(N, P);
+  log = { meta:{ N, P, cells:M*M, mode, aiIters: mode==='ai'?aiIters:null, humanSeats: mode==='ai'?[1]:[...Array(P)].map((_,i)=>i+1),
+                 startedAt:new Date().toISOString(), session:SESSION, ua:navigator.userAgent.slice(0,120) },
+          moves:[], result:null };
+  margin = 26; sp = (560 - margin*2)/(N-1);
+  over = false; aiThinking = false; hoverKey = null; legalNow = legalSet();
+  $('notice').textContent=''; setSend('対局はAIの学習・評価のため匿名で記録されます。');
+  draw(); updateStatus();
+  if(aiSeats.has(s.turn)) scheduleAI();
+}
+
+function applyMove(id, isHuman){
+  const p = s.turn, before = s.cells.slice(), t0 = performance.now();
+  const gain = E.play(s, id, p);
+  const e = E.edgeXY(N, id), painted = [];
+  if(gain>0) for(let i=0;i<before.length;i++) if(before[i]===0 && s.cells[i]!==0) painted.push([i%M,(i/M)|0]);
+  log.moves.push({ ply:s.moves, p, type:e.type, x:e.x, y:e.y, gain, painted, score:Array.from(s.score).slice(1), human:!!isHuman, ms:Math.round(performance.now()-t0) });
+  $('notice').textContent = gain>0 ? `P${p} +${gain}` : '';
+  if(s.turn===0){ legalNow=new Map(); draw(); updateStatus(); return endGame(); }
+  legalNow = legalSet(); draw(); updateStatus();
+  if(aiSeats.has(s.turn)) scheduleAI();
+}
+
+function scheduleAI(){
+  aiThinking = true; updateStatus();
+  setTimeout(()=>{ const mv = E.best(s, aiIters); aiThinking=false; applyMove(mv, false); }, 30);  // 30ms: 「考え中」を描画してから探索
+}
+
+function endGame(){
+  over = true;
+  const final = Array.from(s.score).slice(1);
+  const ranks = final.map((score,i)=>({p:i+1,score})).sort((a,b)=>b.score-a.score);
+  log.result = { ranks, final, plies:s.moves, endedAt:new Date().toISOString() };
+  const r = ranks.map((x,i)=>`${i+1}位 P${x.p}:${x.score}`).join(' / ');
+  $('turn').textContent = '終了'; $('notice').textContent = r;
+  submitLog(log);
+}
+
+async function submitLog(lg){
+  try{ const k='kirishima_games'; const a=JSON.parse(localStorage.getItem(k)||'[]'); a.push(lg); localStorage.setItem(k, JSON.stringify(a).slice(0,4e6)); }catch(e){}
+  if(!ENDPOINT){ setSend('記録：端末内に保存（送信先未設定）'); return; }
+  setSend('記録：送信中…');
+  try{ const res = await fetch(ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(lg) });
+       setSend(res.ok ? '<span class="ok">記録：送信済み ✓</span>' : '<span class="warn">記録：送信失敗（端末内に保存）</span>'); }
+  catch(e){ setSend('<span class="warn">記録：送信失敗（端末内に保存）</span>'); }
+}
+function setSend(html){ $('send').innerHTML = html; }
+
+function updateStatus(){
+  if(over && log && log.result){ return; }
+  const who = aiSeats.has(s.turn) ? `P${s.turn}（AI）` : `P${s.turn}`;
+  $('turn').innerHTML = over ? '—' : (aiThinking ? `<span style="color:${PAL[s.turn]}">${who}</span> 考え中…` : `手番 <span style="color:${PAL[s.turn]}">${who}</span>`);
+  const sc = Array.from(s.score).slice(1).map((v,i)=>`<span style="color:${PAL[i+1]}">P${i+1}:${v}</span>`).join('　');
+  $('score').innerHTML = sc;
+}
+
+// ---- 描画 ----
+function g(ix,iy){ return [margin+ix*sp, margin+iy*sp]; }
+function draw(){
+  const ctx = $('board').getContext('2d'), S = 560;
+  ctx.clearRect(0,0,S,S); ctx.fillStyle='#0f1115'; ctx.fillRect(0,0,S,S);
+  for(let y=0;y<M;y++)for(let x=0;x<M;x++){ const c=s.cells[y*M+x]; if(c){ const[x0,y0]=g(x,y); ctx.fillStyle=hexA(PAL[c],.20); ctx.fillRect(x0,y0,sp,sp); } }
+  ctx.lineWidth=1; ctx.strokeStyle='#2c333a'; ctx.beginPath();
+  for(let i=0;i<N;i++){ const[ax,ay]=g(0,i),[bx]=g(N-1,i); ctx.moveTo(ax,ay); ctx.lineTo(bx,ay); const[cx,cy]=g(i,0),[,dy]=g(i,N-1); ctx.moveTo(cx,cy); ctx.lineTo(cx,dy); }
+  ctx.stroke();
+  ctx.lineWidth=4; ctx.lineCap='round';
+  for(let y=0;y<N;y++)for(let x=0;x<N-1;x++){ const o=s.H[y*(N-1)+x]; if(o){ const[x0,yy]=g(x,y),[x1]=g(x+1,y); ctx.strokeStyle=PAL[o]; ctx.beginPath(); ctx.moveTo(x0,yy); ctx.lineTo(x1,yy); ctx.stroke(); } }
+  for(let y=0;y<N-1;y++)for(let x=0;x<N;x++){ const o=s.V[y*N+x]; if(o){ const[xx,y0]=g(x,y),[,y1]=g(x,y+1); ctx.strokeStyle=PAL[o]; ctx.beginPath(); ctx.moveTo(xx,y0); ctx.lineTo(xx,y1); ctx.stroke(); } }
+  // 直近の手を白で強調
+  if(log && log.moves.length){ const m=log.moves[log.moves.length-1]; ctx.save(); ctx.shadowColor='#fff'; ctx.shadowBlur=12; ctx.lineWidth=6; ctx.strokeStyle='#fff'; ctx.lineCap='round'; ctx.beginPath();
+    if(m.type==='H'){ const[x0,y0]=g(m.x,m.y),[x1]=g(m.x+1,m.y); ctx.moveTo(x0,y0); ctx.lineTo(x1,y0); } else { const[x0,y0]=g(m.x,m.y),[,y1]=g(m.x,m.y+1); ctx.moveTo(x0,y0); ctx.lineTo(x0,y1); }
+    ctx.stroke(); ctx.restore(); }
+  // ホバー候補（人間手番のみ）
+  if(hoverKey && !over && !aiThinking && !aiSeats.has(s.turn) && legalNow.has(hoverKey)){
+    const e = E.edgeXY(N, legalNow.get(hoverKey)); ctx.save(); ctx.globalAlpha=.3; ctx.lineWidth=10; ctx.strokeStyle=PAL[s.turn]; ctx.lineCap='round'; ctx.beginPath();
+    if(e.type==='H'){ const[x0,y0]=g(e.x,e.y),[x1]=g(e.x+1,e.y); ctx.moveTo(x0,y0); ctx.lineTo(x1,y0); } else { const[x0,y0]=g(e.x,e.y),[,y1]=g(e.x,e.y+1); ctx.moveTo(x0,y0); ctx.lineTo(x0,y1); }
+    ctx.stroke(); ctx.restore(); }
+  ctx.fillStyle='#cdd3d8'; for(let y=0;y<N;y++)for(let x=0;x<N;x++){ const[gx,gy]=g(x,y); ctx.beginPath(); ctx.arc(gx,gy,2,0,7); ctx.fill(); }
+}
+function hexA(h,a){ const n=parseInt(h.slice(1),16); return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`; }
+
+// ---- 入力 ----
+function pointerPos(ev){ const r=$('board').getBoundingClientRect(); return [ (ev.clientX-r.left)*(560/r.width), (ev.clientY-r.top)*(560/r.height) ]; }
+function pickEdge(mx,my){
+  let best=null, bd=Infinity; const th=sp*0.28;
+  for(const id of legalNow.values()){ const e=E.edgeXY(N,id); let x0,y0,x1,y1;
+    if(e.type==='H'){ [x0,y0]=g(e.x,e.y); [x1,y1]=g(e.x+1,e.y); } else { [x0,y0]=g(e.x,e.y); [x1,y1]=g(e.x,e.y+1); }
+    const d=ptSeg(mx,my,x0,y0,x1,y1); if(d<bd){ bd=d; best=e; } }
+  return (best && bd<=th) ? best : null;
+}
+function ptSeg(px,py,x0,y0,x1,y1){ const vx=x1-x0,vy=y1-y0,wx=px-x0,wy=py-y0,c1=vx*wx+vy*wy; if(c1<=0)return Math.hypot(px-x0,py-y0); const c2=vx*vx+vy*vy; if(c2<=c1)return Math.hypot(px-x1,py-y1); const b=c1/c2; return Math.hypot(px-(x0+b*vx),py-(y0+b*vy)); }
+function humanTurn(){ return !over && !aiThinking && !aiSeats.has(s.turn); }
+
+const cv = $('board');
+cv.addEventListener('pointermove', ev=>{ if(!s||!humanTurn()){ hoverKey=null; return; } const e=pickEdge(...pointerPos(ev)); hoverKey = e?key(e):null; draw(); });
+cv.addEventListener('pointerdown', ev=>{ if(!s||!humanTurn())return; ev.preventDefault(); const e=pickEdge(...pointerPos(ev)); hoverKey=e?key(e):null; draw(); });
+cv.addEventListener('pointerup', ev=>{ if(!s||!humanTurn())return; const e=pickEdge(...pointerPos(ev)); if(e && legalNow.has(key(e))){ hoverKey=null; applyMove(legalNow.get(key(e)), true); } });
+cv.addEventListener('pointerleave', ()=>{ hoverKey=null; if(s)draw(); });
+
+$('start').addEventListener('click', start);
+$('mode').addEventListener('change', ()=>{ $('aiWrap').style.display = $('mode').value==='ai' ? '' : 'none'; });
+
+// テスト/デバッグ用フック
+window.KG = { get s(){return s}, get log(){return log}, start, apply:applyMove, legal:()=>legalNow, over:()=>over };
+</script>
+</body>
+</html>
