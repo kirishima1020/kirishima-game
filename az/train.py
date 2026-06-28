@@ -105,7 +105,7 @@ def parse():
     ap.add_argument('--hours', type=float, default=3.0)
     ap.add_argument('--teacher', default='teacher.ndjson')
     ap.add_argument('--out', default='ckpt')
-    ap.add_argument('--sims', type=int, default=100)
+    ap.add_argument('--sims', type=int, default=200)
     ap.add_argument('--workers', type=int, default=0)
     ap.add_argument('--games-per-worker', type=int, default=2)
     ap.add_argument('--batch', type=int, default=256)
@@ -114,7 +114,8 @@ def parse():
     ap.add_argument('--warm-epochs', type=int, default=20)
     ap.add_argument('--lr', type=float, default=1e-3)   # 強いwarmのため戻す。自己対局の安定は教師アンカー+クリップが担う
     ap.add_argument('--clip', type=float, default=10.0)   # 暴れ防止の保険のみ。安定の主役は教師アンカー。1.0は絞りすぎて学習が死ぬ
-    ap.add_argument('--teacher-frac', type=float, default=0.3)   # 毎バッチに教師を混ぜる割合（退行防止）
+    ap.add_argument('--teacher-frac', type=float, default=0.3)   # 教師アンカー初期値（退行防止）
+    ap.add_argument('--teacher-anneal', type=int, default=25)    # この round 数で 0.3→0.05 へ減衰（教師超えを許す）
     ap.add_argument('--eval-every', type=int, default=20)        # 評価頻度（ラウンド）
     ap.add_argument('--eval-games', type=int, default=4)
     ap.add_argument('--shutdown', action='store_true')
@@ -150,10 +151,10 @@ def main():
     def cpu_state():
         return {k: v.detach().cpu() for k, v in net.state_dict().items()}
 
-    def train_on(buf, teacher, steps):
+    def train_on(buf, teacher, steps, tfrac):
         if len(buf) < a.batch: return None
         net.train(); ps = vs = 0.0
-        nt = int(a.batch * a.teacher_frac) if teacher else 0
+        nt = int(a.batch * tfrac) if teacher else 0
         nb = a.batch - nt
         for _ in range(steps):
             samp = []
@@ -182,7 +183,7 @@ def main():
     print(f'teacher samples = {len(ts)}', flush=True)
     if ts:
         for ep in range(a.warm_epochs):
-            r = train_on(ts, None, max(1, len(ts) // a.batch))
+            r = train_on(ts, None, max(1, len(ts) // a.batch), 0.0)
             if r and (ep % 4 == 3 or ep == a.warm_epochs - 1):
                 print(f'  warm ep{ep+1}: ploss={r[0]:.3f} vloss={r[1]:.3f}', flush=True)
         torch.save(net.state_dict(), os.path.join(a.out, 'net_warm.pt'))
@@ -195,9 +196,10 @@ def main():
         rnd += 1
         net_cpu.load_state_dict(cpu_state())
         buf.extend(parallel_selfplay(a.games_per_worker, a.workers, rng.randrange(1 << 30)))
-        r = train_on(buf, ts, a.train_steps)
+        tfrac = max(0.05, a.teacher_frac * (1 - rnd / a.teacher_anneal))   # アンカー減衰：教師超えを許す
+        r = train_on(buf, ts, a.train_steps, tfrac)
         el = (time.time() - t0) / 60
-        line = f'round {rnd} t={el:.1f}m games={a.workers*a.games_per_worker} buf={len(buf)}'
+        line = f'round {rnd} t={el:.1f}m tf={tfrac:.2f} games={a.workers*a.games_per_worker} buf={len(buf)}'
         if r: line += f' ploss={r[0]:.3f} vloss={r[1]:.3f}'
         print(line, flush=True)
         torch.save(net.state_dict(), os.path.join(a.out, 'net_latest.pt'))

@@ -4,10 +4,10 @@
 // 使い方: node az_teacher.js [N=7] [iters=400] [games=120] > teacher.ndjson  2> teacher.log
 const { setSeed, makeGame, ensure, best, play } = require('../engine');
 
-const N = +process.argv[2] || 7, IT = +process.argv[3] || 400, G = +process.argv[4] || 120;
+const N = +process.argv[2] || 7, IT = +process.argv[3] || 400, G = +process.argv[4] || 120, BASE = +process.argv[5] || 1000;
 const out = [];
 for (let g = 0; g < G; g++) {
-  setSeed(1000 + g * 7); ensure(N);
+  setSeed(BASE + g * 7); ensure(N);
   const s = makeGame(N, 2), ids = [], cap = (N - 1) * (N - 1) * 4 + 60;
   while (s.turn !== 0) { const mv = best(s, IT, true, false); ids.push(mv); play(s, mv, s.turn); if (s.moves > cap) break; }
   const winner = s.score[1] > s.score[2] ? 1 : (s.score[2] > s.score[1] ? 2 : 0);
