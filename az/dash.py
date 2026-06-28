@@ -118,24 +118,31 @@ def render(st, frame):
     L.append(row(f" {C['dim']}↑0から上がれば手法が効いてる＝3時間に賭けてよし{C['reset']}"))
     L.append(f"{C['cyan']}├{top}┤{C['reset']}")
     L.append(row(f" {C['dim']}log:{C['reset']} {st['last']}"))
+    L.append(f"{C['cyan']}├{top}┤{C['reset']}")
+    L.append(row(f" {C['dim']}Ctrl-C=終了  tmuxなら Ctrl-B→D で裏へ（学習は継続）{C['reset']}"))
     L.append(f"{C['bold']}{C['cyan']}╰{top}╯{C['reset']}")
     return '\n'.join(x + '\033[K' for x in L)
 
 
 def loop(get_line, st):
+    # 全画面clearは最初の1回だけ。以後は box 領域だけ上書きし、box の下に打った文字は消さない
+    # （画面末尾の \033[J を出さない）。塗り直しは「変化時＋0.5秒ごと」に抑え、端末と喧嘩しない。
     sys.stdout.write('\033[2J\033[?25l')
-    frame = 0
+    frame = 0; last_paint = 0.0
     try:
         while True:
             line = get_line()
-            if line is not None:
+            changed = line is not None
+            if changed:
                 parse(line, st)
-            sys.stdout.write('\033[H' + render(st, frame) + '\033[J')
-            sys.stdout.flush()
-            frame += 1
+            now = time.time()
+            if changed or now - last_paint >= 0.5:
+                sys.stdout.write('\033[H' + render(st, frame))
+                sys.stdout.flush()
+                last_paint = now; frame += 1
             if st['done'] and line is None:
                 break
-            time.sleep(0.12)
+            time.sleep(0.1)
     finally:
         sys.stdout.write('\033[?25h\n')
         sys.stdout.flush()
@@ -166,8 +173,17 @@ def run_training(args):
         if v is False:
             eof[0] = True; st['done'] = st['done'] or True; return None
         return v
-    loop(gl, st)
+    try:
+        loop(gl, st)
+    except KeyboardInterrupt:
+        pass
+    try:
+        proc.terminate()
+    except Exception:
+        pass
     proc.wait()
+    sys.stdout.write(f"{C['yellow']}■ ダッシュ終了。学習プロセスも停止しました。{C['reset']}\n")
+    sys.stdout.flush()
 
 
 def demo():
