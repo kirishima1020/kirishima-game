@@ -112,7 +112,7 @@ def parse():
     ap.add_argument('--train-steps', type=int, default=150)
     ap.add_argument('--buffer', type=int, default=150000)
     ap.add_argument('--warm-epochs', type=int, default=20)
-    ap.add_argument('--lr', type=float, default=3e-4)
+    ap.add_argument('--lr', type=float, default=1e-3)   # 強いwarmのため戻す。自己対局の安定は教師アンカー+クリップが担う
     ap.add_argument('--clip', type=float, default=1.0)
     ap.add_argument('--teacher-frac', type=float, default=0.3)   # 毎バッチに教師を混ぜる割合（退行防止）
     ap.add_argument('--eval-every', type=int, default=20)        # 評価頻度（ラウンド）
