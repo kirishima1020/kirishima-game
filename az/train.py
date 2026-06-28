@@ -120,6 +120,7 @@ def parse():
     ap.add_argument('--eval-games', type=int, default=4)
     ap.add_argument('--shutdown', action='store_true')
     ap.add_argument('--smoke', action='store_true')
+    ap.add_argument('--diag', action='store_true')   # warm網の強さ分析だけして終了（長時間回す価値の判定）
     return ap.parse_args()
 
 
@@ -188,6 +189,18 @@ def main():
                 print(f'  warm ep{ep+1}: ploss={r[0]:.3f} vloss={r[1]:.3f}', flush=True)
         torch.save(net.state_dict(), os.path.join(a.out, 'net_warm.pt'))
         do_eval('warm後')
+
+    if a.diag:
+        print('[diag] warm網の強さ分析（vs 捕獲貪欲・各6局）。smart-500は貪欲を1.00で粉砕する＝これが合格基準。', flush=True)
+        base = MD.make_evaluator(net, device)
+        def noval(s):
+            p, _ = base(s); return p, 0.0   # 価値を0に＝policyのみで探索
+        for sims in (64, 256, 1024):
+            print(f'  sims={sims} 価値あり: 勝率={eval_net_vs_greedy(eval_ev, a.N, sims, 6, rng):.2f}', flush=True)
+        print(f'  sims=256 価値なし(policyのみ): 勝率={eval_net_vs_greedy(noval, a.N, 256, 6, rng):.2f}', flush=True)
+        print('[読み] simsを上げて勝率↑→探索不足(高sims+長時間で解決)。flat→価値/MCTSが壊れ。'
+              ' 価値なし>価値あり→価値が害(バグ)。', flush=True)
+        return
 
     # 2) 並列自己対局ループ（教師アンカー混ぜ）
     buf = collections.deque(maxlen=a.buffer)
