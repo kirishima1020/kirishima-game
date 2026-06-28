@@ -14,7 +14,7 @@ command -v tmux >/dev/null || { apt-get update -qq && apt-get install -y -qq tmu
 # 既に動いていれば、新規起動せず再入場するだけ。
 if tmux has-session -t "$S" 2>/dev/null; then exec tmux attach -t "$S"; fi
 
-ARGS="${*:---hours 3 --N 7 --workers 30}"
+ARGS="${*:---hours 3 --N 7 --workers 30 --eval-every 1}"
 tmux new-session  -d -s "$S" -n learn -c "$PWD"
 tmux send-keys    -t "$S:learn" "LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 python dash.py $ARGS" C-m
 tmux new-window   -t "$S" -n shell -c "$PWD"

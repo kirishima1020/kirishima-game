@@ -84,6 +84,13 @@ def spark(vals, w=40):
     return ''.join(BLOCKS[1 + int((v - lo) / rng * (len(BLOCKS) - 2))] for v in vals)
 
 
+def spark01(vals, w=40):
+    """勝率専用：0〜1の固定スケール（0に張り付けば底のまま、上がれば上がる）。"""
+    vals = list(vals)[-w:]
+    if not vals: return ' ' * w
+    return ''.join(BLOCKS[1 + int(max(0.0, min(1.0, v)) * (len(BLOCKS) - 2))] for v in vals)
+
+
 def bar(frac, w=30, fill='█', empty='░'):
     frac = max(0.0, min(1.0, frac)); n = int(frac * w)
     return fill * n + empty * (w - n)
@@ -113,17 +120,17 @@ def render(st, frame):
     L.append(row(f" 方策損失 {C['mag']}{spark(st['ploss'], 38)}{C['reset']} {pl:5.2f}"))
     L.append(row(f" 価値損失 {C['blue']}{spark(st['vloss'], 38)}{C['reset']} {vl:5.3f}"))
     L.append(f"{C['cyan']}├{top}┤{C['reset']}")
-    ev = st['last_eval']
-    evcol = C['green'] if (ev or 0) >= 0.5 else (C['yellow'] if (ev or 0) > 0 else C['red'])
-    evtxt = f"{ev:.2f}" if ev is not None else "--"
-    L.append(row(f" {C['bold']}eval 網vs捕獲貪欲{C['reset']} {evcol}{bar((ev or 0), 22)}{C['reset']} {evcol}{evtxt}{C['reset']}"))
-    hist = ' '.join(f"{v:.2f}" for v in st['evals'][-7:]) or '(まだ)'
-    L.append(row(f" {C['dim']}履歴 {hist}{C['reset']}"))
-    L.append(row(f" {C['dim']}↑0から上がれば手法が効いてる＝3時間に賭けてよし{C['reset']}"))
+    evs = st['evals']
+    roll = sum(evs[-12:]) / len(evs[-12:]) if evs else None   # 直近12回の移動勝率
+    rc = C['green'] if (roll or 0) >= 0.5 else (C['yellow'] if (roll or 0) > 0 else C['red'])
+    rolltxt = f"{roll:.2f}" if roll is not None else "--"
+    L.append(row(f" {C['bold']}勝率 網vs捕獲貪欲{C['reset']} {rc}{spark01(evs, 30)}{C['reset']} {rc}直近{rolltxt}{C['reset']}"))
+    cur = f"{st['last_eval']:.2f}" if st['last_eval'] is not None else "--"
+    L.append(row(f" {C['dim']}最新 {cur}  測定 {len(evs)} 回  ↑0.5線を越えれば捕獲貪欲を圧倒{C['reset']}"))
     L.append(f"{C['cyan']}├{top}┤{C['reset']}")
     L.append(row(f" {C['dim']}log:{C['reset']} {st['last']}"))
     L.append(f"{C['cyan']}├{top}┤{C['reset']}")
-    L.append(row(f" {C['dim']}Ctrl-C=終了  tmuxなら Ctrl-B→D で裏へ（学習は継続）{C['reset']}"))
+    L.append(row(f" {C['dim']}Ctrl-B→P パネル⇄シェル  Ctrl-B→L 学習へ  Ctrl-B→D 裏へ  Ctrl-C 停止{C['reset']}"))
     L.append(f"{C['bold']}{C['cyan']}╰{top}╯{C['reset']}")
     return '\n'.join(x + '\033[K' for x in L)
 
