@@ -124,10 +124,14 @@ def render(st, frame):
     return '\n'.join(x + '\033[K' for x in L)
 
 
+ALT_ON = '\033[?1049h\033[2J\033[?25l'   # 代替スクリーンに入る・全消し・カーソル隠す
+ALT_OFF = '\033[?25h\033[?1049l'          # カーソル戻す・元画面（シェル）に復帰
+
+
 def loop(get_line, st):
-    # 全画面clearは最初の1回だけ。以後は box 領域だけ上書きし、box の下に打った文字は消さない
-    # （画面末尾の \033[J を出さない）。塗り直しは「変化時＋0.5秒ごと」に抑え、端末と喧嘩しない。
-    sys.stdout.write('\033[2J\033[?25l')
+    # 代替スクリーンに切替＝ダッシュ専用のまっさらな画面に固定表示。抜けると元のシェルが戻る。
+    # 塗り直しは「変化時＋0.5秒ごと」に抑える。
+    sys.stdout.write(ALT_ON)
     frame = 0; last_paint = 0.0
     try:
         while True:
@@ -137,14 +141,14 @@ def loop(get_line, st):
                 parse(line, st)
             now = time.time()
             if changed or now - last_paint >= 0.5:
-                sys.stdout.write('\033[H' + render(st, frame))
+                sys.stdout.write('\033[H' + render(st, frame) + '\033[0J')
                 sys.stdout.flush()
                 last_paint = now; frame += 1
             if st['done'] and line is None:
                 break
             time.sleep(0.1)
     finally:
-        sys.stdout.write('\033[?25h\n')
+        sys.stdout.write(ALT_OFF)
         sys.stdout.flush()
 
 
@@ -173,16 +177,19 @@ def run_training(args):
         if v is False:
             eof[0] = True; st['done'] = st['done'] or True; return None
         return v
+    interrupted = False
     try:
         loop(gl, st)
     except KeyboardInterrupt:
-        pass
-    try:
-        proc.terminate()
-    except Exception:
-        pass
+        interrupted = True
+    if interrupted:
+        try: proc.terminate()
+        except Exception: pass
     proc.wait()
-    sys.stdout.write(f"{C['yellow']}■ ダッシュ終了。学習プロセスも停止しました。{C['reset']}\n")
+    ev = st['last_eval']
+    tag = 'を中断（学習も停止）' if interrupted else '完了'
+    sys.stdout.write(f"{C['yellow']}■ 学習{tag}{C['reset']}  ラウンド{st['rnd']} 総対局{st['games']} "
+                     f"最終eval={ev if ev is not None else '--'}  （ckptは --out=既定 ckpt/ に保存済み）\n")
     sys.stdout.flush()
 
 
@@ -220,7 +227,7 @@ def demo():
 
     def render_after(s):
         return render(s, int(time.time() * 8) % len(SPIN))
-    sys.stdout.write('\033[2J\033[?25l')
+    sys.stdout.write(ALT_ON)
     try:
         while True:
             ln = gl()
@@ -229,9 +236,9 @@ def demo():
             sys.stdout.write('\033[H' + render(st, int(time.time() * 8) % 99) + '\033[J'); sys.stdout.flush()
             time.sleep(0.12)
             if not pending[0] and st['done']:
-                sys.stdout.write('\033[H' + render(st, 0) + '\033[J'); break
+                sys.stdout.write('\033[H' + render(st, 0) + '\033[J'); time.sleep(1.2); break
     finally:
-        sys.stdout.write('\033[?25h\n'); sys.stdout.flush()
+        sys.stdout.write(ALT_OFF + '\n'); sys.stdout.flush()
 
 
 def selftest():
