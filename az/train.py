@@ -14,18 +14,26 @@ import numpy as np
 import engine as E
 import mcts as MC
 import baseline as BL
+import solve as SV
 
 # --- 自己対局（torch非依存。評価器はモジュールグローバルで fork 継承）---
-_EVAL = None; _N = None; _SIMS = None
+_EVAL = None; _N = None; _SIMS = None; _ECELLS = 0; _ENODES = 0
 
 
 def value_target(w, mover):
     return 0.0 if w == 0 else (1.0 if w == mover else -1.0)
 
 
-def selfplay_game(N, ev, sims, rng, temp_moves=14):
+def selfplay_game(N, ev, sims, rng, temp_moves=14, ecells=0, enodes=0):
     EC = E.EC(N); s = E.make_game(N, 2); hist = []; cap = (N - 1) * (N - 1) * 4 + 60
+    exact_w = None
     while s.turn != 0:
+        # 終盤に入ったら厳密ソルバの勝敗で打ち切る（弱い網での雑な打ち切りを真理で置換）。
+        # 予算超過（枝が多すぎ）なら None が返り、通常どおり自己対局を続ける。
+        if ecells:
+            ev_res = SV.endgame_value(s, max_cells=ecells, max_nodes=enodes)
+            if ev_res is not None:
+                exact_w = ev_res[0]; break
         visits = MC.search(s, ev, sims, dirichlet=0.3, rng=rng)
         if not visits: break
         pol = np.zeros(EC, dtype=np.float32); tot = sum(visits.values()) or 1
@@ -34,7 +42,7 @@ def selfplay_game(N, ev, sims, rng, temp_moves=14):
         mv = MC.pick_move(visits, 1.0 if s.moves < temp_moves else 0.0, rng)
         E.play(s, mv, s.turn)
         if s.moves > cap: break
-    w = E.winner(s)
+    w = exact_w if exact_w is not None else E.winner(s)
     return [(pl, pol, value_target(w, mover)) for pl, pol, mover in hist]
 
 
@@ -42,7 +50,7 @@ def _play_chunk(args):
     n_games, seed = args
     rng = random.Random(seed); out = []
     for _ in range(n_games):
-        out.extend(selfplay_game(_N, _EVAL, _SIMS, rng))
+        out.extend(selfplay_game(_N, _EVAL, _SIMS, rng, ecells=_ECELLS, enodes=_ENODES))
     return out
 
 
@@ -118,6 +126,8 @@ def parse():
     ap.add_argument('--teacher-anneal', type=int, default=25)    # この round 数で 0.3→0.05 へ減衰（教師超えを許す）
     ap.add_argument('--eval-every', type=int, default=20)        # 評価頻度（ラウンド）
     ap.add_argument('--eval-games', type=int, default=4)
+    ap.add_argument('--endgame-cells', type=int, default=9)      # 空きセル≤これで終盤ソルバ起動（0で無効）
+    ap.add_argument('--endgame-nodes', type=int, default=60000)  # ソルバのノード予算（超で網に退避し詰まらせない）
     ap.add_argument('--shutdown', action='store_true')
     ap.add_argument('--smoke', action='store_true')
     ap.add_argument('--diag', action='store_true')   # warm網の強さ分析だけして終了（長時間回す価値の判定）
@@ -125,7 +135,7 @@ def parse():
 
 
 def main():
-    global _EVAL, _N, _SIMS
+    global _EVAL, _N, _SIMS, _ECELLS, _ENODES
     try: mp.set_start_method('fork')
     except RuntimeError: pass
     a = parse()
@@ -146,6 +156,8 @@ def main():
     net_cpu = MD.Net(a.N)               # 自己対局用（CPU・fork安全）
     opt = torch.optim.Adam(net.parameters(), lr=a.lr, weight_decay=1e-4)
     _N, _SIMS = a.N, a.sims
+    _ECELLS, _ENODES = a.endgame_cells, a.endgame_nodes
+    print(f'endgame solver: cells<={_ECELLS} budget={_ENODES} nodes', flush=True)
     _EVAL = MD.make_evaluator(net_cpu, 'cpu')       # ワーカ用（CPU）
     eval_ev = MD.make_evaluator(net, device)        # 評価用（GPU・速い）
 
