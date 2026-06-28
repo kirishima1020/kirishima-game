@@ -1,15 +1,12 @@
-"""キリシマ AlphaZero 学習（並列自己対局）。
-  1) ウォームスタート：ver2+ 教師を模倣 → 一気に ver2+ 並み。
-  2) 自己対局：複数コアで並列に網-MCTS 対局 → (局面, MCTS訪問分布, 勝敗) を貯めて磨く。
-  メインで学習（GPUあれば使うが、網が極小なのでCPUでも十分。要はコア数）。逐次チェックポイント。
+"""キリシマ AlphaZero 学習（並列自己対局・安定化版）。
+  1) ウォームスタート：ver2+ 教師を模倣。
+  2) 並列自己対局（30コア）で (局面, MCTS訪問分布, 勝敗) を貯めて磨く。
+  安定化：学習率↓＋勾配クリップ＋**教師を毎バッチに混ぜ続ける**（退行防止）＋自己対局 sims↑。
+  評価は GPU網で低頻度（本筋を食わない）。逐次チェックポイント。
 
 使い方:
-  python train.py --smoke                         # 数分で動作確認
-  python train.py --hours 1 --N 7 --workers 30    # 32コア箱で1時間
-  python train.py --hours 3 --N 7 --shutdown      # 終了後にポッド停止（要・永続保存先）
-
-torch非依存（engine/mcts/numpy/multiprocessing）を上に置き、torch/model は実行時に読む
-（並列プラミングをスタブでローカル検証できるように）。
+  python train.py --smoke
+  python train.py --hours 1 --N 7 --workers 30
 """
 import argparse, json, time, os, random, collections
 import multiprocessing as mp
@@ -26,7 +23,7 @@ def value_target(w, mover):
     return 0.0 if w == 0 else (1.0 if w == mover else -1.0)
 
 
-def selfplay_game(N, ev, sims, rng, temp_moves=12):
+def selfplay_game(N, ev, sims, rng, temp_moves=14):
     EC = E.EC(N); s = E.make_game(N, 2); hist = []; cap = (N - 1) * (N - 1) * 4 + 60
     while s.turn != 0:
         visits = MC.search(s, ev, sims, dirichlet=0.3, rng=rng)
@@ -51,7 +48,7 @@ def _play_chunk(args):
 
 def _winit():
     try:
-        import torch; torch.set_num_threads(1)   # ワーカは1スレッド（過剰購読回避）。torch無くても可。
+        import torch; torch.set_num_threads(1)
     except Exception:
         pass
 
@@ -62,14 +59,14 @@ def parallel_selfplay(games_per_worker, workers, base_seed):
         out = []
         for c in chunks: out.extend(_play_chunk(c))
         return out
-    with mp.Pool(workers, initializer=_winit) as pool:   # fork: ワーカは現在の _EVAL(net) を継承
+    with mp.Pool(workers, initializer=_winit) as pool:
         res = pool.map(_play_chunk, chunks)
     out = []
     for r in res: out.extend(r)
     return out
 
 
-# --- 以下 torch 必須（main から呼ぶ）---
+# --- 以下 torch 必須 ---
 def teacher_samples(path, N):
     EC = E.EC(N); out = []
     if not os.path.exists(path):
@@ -108,14 +105,18 @@ def parse():
     ap.add_argument('--hours', type=float, default=3.0)
     ap.add_argument('--teacher', default='teacher.ndjson')
     ap.add_argument('--out', default='ckpt')
-    ap.add_argument('--sims', type=int, default=64)
-    ap.add_argument('--workers', type=int, default=0)          # 0=自動(コア-2)
+    ap.add_argument('--sims', type=int, default=100)
+    ap.add_argument('--workers', type=int, default=0)
     ap.add_argument('--games-per-worker', type=int, default=2)
     ap.add_argument('--batch', type=int, default=256)
-    ap.add_argument('--train-steps', type=int, default=200)
-    ap.add_argument('--buffer', type=int, default=120000)
-    ap.add_argument('--warm-epochs', type=int, default=8)
-    ap.add_argument('--lr', type=float, default=1e-3)
+    ap.add_argument('--train-steps', type=int, default=150)
+    ap.add_argument('--buffer', type=int, default=150000)
+    ap.add_argument('--warm-epochs', type=int, default=20)
+    ap.add_argument('--lr', type=float, default=3e-4)
+    ap.add_argument('--clip', type=float, default=1.0)
+    ap.add_argument('--teacher-frac', type=float, default=0.3)   # 毎バッチに教師を混ぜる割合（退行防止）
+    ap.add_argument('--eval-every', type=int, default=20)        # 評価頻度（ラウンド）
+    ap.add_argument('--eval-games', type=int, default=4)
     ap.add_argument('--shutdown', action='store_true')
     ap.add_argument('--smoke', action='store_true')
     return ap.parse_args()
@@ -123,11 +124,11 @@ def parse():
 
 def main():
     global _EVAL, _N, _SIMS
-    try: mp.set_start_method('fork')   # ワーカが親の網(_EVAL)を継承するため。Linux既定・macも可。
+    try: mp.set_start_method('fork')
     except RuntimeError: pass
     a = parse()
     if a.smoke:
-        a.hours, a.games_per_worker, a.train_steps, a.warm_epochs, a.sims, a.workers = 0.03, 1, 10, 1, 16, 2
+        a.hours, a.games_per_worker, a.train_steps, a.warm_epochs, a.sims, a.workers, a.eval_every = 0.05, 1, 10, 2, 16, 2, 1
     if a.workers <= 0:
         a.workers = max(1, (os.cpu_count() or 4) - 2)
 
@@ -135,69 +136,75 @@ def main():
     import torch.nn.functional as F
     import model as MD
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f'device={device} N={a.N} sims={a.sims} workers={a.workers} hours={a.hours}', flush=True)
+    print(f'device={device} N={a.N} sims={a.sims} workers={a.workers} lr={a.lr} t-frac={a.teacher_frac} hours={a.hours}', flush=True)
     os.makedirs(a.out, exist_ok=True)
     rng = random.Random(12345)
 
-    net = MD.Net(a.N).to(device)                 # 学習用
-    net_cpu = MD.Net(a.N)                          # 自己対局用（CPU・fork安全）
+    net = MD.Net(a.N).to(device)        # 学習用（GPU）
+    net_cpu = MD.Net(a.N)               # 自己対局用（CPU・fork安全）
     opt = torch.optim.Adam(net.parameters(), lr=a.lr, weight_decay=1e-4)
     _N, _SIMS = a.N, a.sims
-    _EVAL = MD.make_evaluator(net_cpu, 'cpu')
+    _EVAL = MD.make_evaluator(net_cpu, 'cpu')       # ワーカ用（CPU）
+    eval_ev = MD.make_evaluator(net, device)        # 評価用（GPU・速い）
 
     def cpu_state():
         return {k: v.detach().cpu() for k, v in net.state_dict().items()}
 
-    def train_on(buf, steps):
+    def train_on(buf, teacher, steps):
         if len(buf) < a.batch: return None
         net.train(); ps = vs = 0.0
+        nt = int(a.batch * a.teacher_frac) if teacher else 0
+        nb = a.batch - nt
         for _ in range(steps):
-            idx = np.random.randint(0, len(buf), size=a.batch)
-            X = torch.from_numpy(np.stack([buf[i][0] for i in idx])).to(device)
-            P = torch.from_numpy(np.stack([buf[i][1] for i in idx])).to(device)
-            Vt = torch.tensor([buf[i][2] for i in idx], dtype=torch.float32, device=device)
+            samp = []
+            if nt:
+                for i in np.random.randint(0, len(teacher), nt): samp.append(teacher[i])
+            for i in np.random.randint(0, len(buf), nb): samp.append(buf[i])
+            X = torch.from_numpy(np.stack([s[0] for s in samp])).to(device)
+            P = torch.from_numpy(np.stack([s[1] for s in samp])).to(device)
+            Vt = torch.tensor([s[2] for s in samp], dtype=torch.float32, device=device)
             logits, v = net(X)
             ploss = -(P * F.log_softmax(logits, dim=1)).sum(1).mean()
             vloss = F.mse_loss(v, Vt)
-            (ploss + vloss).backward(); opt.step(); opt.zero_grad()
+            (ploss + vloss).backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), a.clip)
+            opt.step(); opt.zero_grad()
             ps += float(ploss); vs += float(vloss)
         return ps / steps, vs / steps
 
-    def save(name):
-        torch.save(net.state_dict(), os.path.join(a.out, name))
+    def do_eval(tag):
+        net_cpu.load_state_dict(cpu_state())  # （ワーカ網も最新化）
+        wr = eval_net_vs_greedy(eval_ev, a.N, a.sims, 2 if a.smoke else a.eval_games, rng)
+        print(f'  [eval {tag}] 網-MCTS vs 捕獲貪欲 勝率 = {wr:.2f}', flush=True)
 
-    # 1) ウォームスタート
+    # 1) ウォームスタート（教師模倣）
     ts = teacher_samples(a.teacher, a.N)
     print(f'teacher samples = {len(ts)}', flush=True)
     if ts:
         for ep in range(a.warm_epochs):
-            r = train_on(ts, max(1, len(ts) // a.batch))
-            if r: print(f'  warm ep{ep+1}: ploss={r[0]:.3f} vloss={r[1]:.3f}', flush=True)
-        save('net_warm.pt')
-        net_cpu.load_state_dict(cpu_state())
-        wr = eval_net_vs_greedy(_EVAL, a.N, max(48, a.sims), 2 if a.smoke else 6, rng)
-        print(f'  [eval ウォームスタート後] 網-MCTS vs 捕獲貪欲 勝率 = {wr:.2f}', flush=True)
+            r = train_on(ts, None, max(1, len(ts) // a.batch))
+            if r and (ep % 4 == 3 or ep == a.warm_epochs - 1):
+                print(f'  warm ep{ep+1}: ploss={r[0]:.3f} vloss={r[1]:.3f}', flush=True)
+        torch.save(net.state_dict(), os.path.join(a.out, 'net_warm.pt'))
+        do_eval('warm後')
 
-    # 2) 並列自己対局ループ
-    buf = collections.deque(maxlen=a.buffer); buf.extend(ts)
+    # 2) 並列自己対局ループ（教師アンカー混ぜ）
+    buf = collections.deque(maxlen=a.buffer)
     t0 = time.time(); rnd = 0
     while time.time() - t0 < a.hours * 3600:
         rnd += 1
-        net_cpu.load_state_dict(cpu_state())                 # 自己対局網に最新重みを反映（fork前）
-        samples = parallel_selfplay(a.games_per_worker, a.workers, rng.randrange(1 << 30))
-        buf.extend(samples)
-        r = train_on(buf, a.train_steps)
+        net_cpu.load_state_dict(cpu_state())
+        buf.extend(parallel_selfplay(a.games_per_worker, a.workers, rng.randrange(1 << 30)))
+        r = train_on(buf, ts, a.train_steps)
         el = (time.time() - t0) / 60
         line = f'round {rnd} t={el:.1f}m games={a.workers*a.games_per_worker} buf={len(buf)}'
         if r: line += f' ploss={r[0]:.3f} vloss={r[1]:.3f}'
         print(line, flush=True)
-        save('net_latest.pt')
-        if rnd % 3 == 0 or a.smoke:
-            net_cpu.load_state_dict(cpu_state())
-            wr = eval_net_vs_greedy(_EVAL, a.N, max(48, a.sims), 2 if a.smoke else 6, rng)
-            print(f'  [eval] 網-MCTS vs 捕獲貪欲 勝率 = {wr:.2f}', flush=True)
+        torch.save(net.state_dict(), os.path.join(a.out, 'net_latest.pt'))
+        if rnd % a.eval_every == 0 or a.smoke:
+            do_eval(f'r{rnd}')
         if a.smoke: break
-    save('net_final.pt')
+    torch.save(net.state_dict(), os.path.join(a.out, 'net_final.pt'))
     print('done ->', os.path.join(a.out, 'net_final.pt'), flush=True)
 
     if a.shutdown:
