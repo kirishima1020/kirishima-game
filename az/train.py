@@ -165,7 +165,7 @@ def parse():
     ap.add_argument('--eval-every', type=int, default=20)        # 評価頻度（ラウンド）
     ap.add_argument('--eval-games', type=int, default=4)
     ap.add_argument('--eval-opp', choices=['greedy', 'champion'], default='champion')  # 評価相手。championは捕獲認識MCTS
-    ap.add_argument('--champ-sims', type=int, default=120)   # 評価相手(捕獲認識MCTS)の探索数。重いので控えめ
+    ap.add_argument('--champ-sims', type=int, default=0)   # 評価相手(捕獲認識MCTS)の探索数。0で網と同sims（公平）
     ap.add_argument('--endgame-cells', type=int, default=9)      # 空きセル≤これで終盤ソルバ起動（0で無効）
     ap.add_argument('--endgame-nodes', type=int, default=60000)  # ソルバのノード予算（超で網に退避し詰まらせない）
     ap.add_argument('--shutdown', action='store_true')
@@ -227,9 +227,10 @@ def main():
         return ps / steps, vs / steps
 
     if a.eval_opp == 'champion':
+        _cs = a.champ_sims if a.champ_sims else a.sims     # 0なら網と同sims（公平比較）
         _champ_ev = rollout_evaluator(True, rng)
-        _opp = lambda s: MC.pick_move(MC.search(s, _champ_ev, a.champ_sims, rng=rng), 0.0, rng)
-        _opp_label = f'捕獲認識MCTS({a.champ_sims})'
+        _opp = lambda s: MC.pick_move(MC.search(s, _champ_ev, _cs, rng=rng), 0.0, rng)
+        _opp_label = f'捕獲認識MCTS({_cs})'
     else:
         _opp = lambda s: BL.greedy_move(s, rng)
         _opp_label = '捕獲貪欲'
