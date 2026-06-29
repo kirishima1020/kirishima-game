@@ -169,6 +169,7 @@ def parse():
     ap.add_argument('--endgame-cells', type=int, default=9)      # 空きセル≤これで終盤ソルバ起動（0で無効）
     ap.add_argument('--endgame-nodes', type=int, default=60000)  # ソルバのノード予算（超で網に退避し詰まらせない）
     ap.add_argument('--shutdown', action='store_true')
+    ap.add_argument('--init', default='')   # 保存済み網から再開（warm-startをスキップしてこの重みで続ける）
     ap.add_argument('--smoke', action='store_true')
     ap.add_argument('--diag', action='store_true')   # warm網の強さ分析だけして終了（長時間回す価値の判定）
     return ap.parse_args()
@@ -240,10 +241,14 @@ def main():
         wr = eval_net_vs(eval_ev, _opp, a.N, a.sims, 2 if a.smoke else a.eval_games, rng)
         print(f'  [eval {tag}] 網-MCTS vs {_opp_label} 勝率 = {wr:.2f}', flush=True)
 
-    # 1) ウォームスタート（教師模倣）
+    # 1) ウォームスタート（教師模倣）。--init があれば保存済み網から再開（warmスキップ）。
     ts = teacher_samples(a.teacher, a.N)
     print(f'teacher samples = {len(ts)}', flush=True)
-    if ts:
+    if a.init:
+        net.load_state_dict(torch.load(a.init, map_location=device))
+        print(f'再開: {a.init} の重みから続ける（warm-start スキップ）', flush=True)
+        do_eval('init')
+    elif ts:
         for ep in range(a.warm_epochs):
             r = train_on(ts, None, max(1, len(ts) // a.batch), 0.0)
             if r and (ep % 4 == 3 or ep == a.warm_epochs - 1):
