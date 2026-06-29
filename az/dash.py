@@ -124,9 +124,9 @@ def render(st, frame):
     roll = sum(evs[-12:]) / len(evs[-12:]) if evs else None   # 直近12回の移動勝率
     rc = C['green'] if (roll or 0) >= 0.5 else (C['yellow'] if (roll or 0) > 0 else C['red'])
     rolltxt = f"{roll:.2f}" if roll is not None else "--"
-    L.append(row(f" {C['bold']}勝率 網vs捕獲貪欲{C['reset']} {rc}{spark01(evs, 30)}{C['reset']} {rc}直近{rolltxt}{C['reset']}"))
+    L.append(row(f" {C['bold']}勝率 網vs評価相手{C['reset']} {rc}{spark01(evs, 30)}{C['reset']} {rc}直近{rolltxt}{C['reset']}"))
     cur = f"{st['last_eval']:.2f}" if st['last_eval'] is not None else "--"
-    L.append(row(f" {C['dim']}最新 {cur}  測定 {len(evs)} 回  ↑0.5線を越えれば捕獲貪欲を圧倒{C['reset']}"))
+    L.append(row(f" {C['dim']}最新 {cur}  測定 {len(evs)} 回  ↑0.5線を越えれば相手を圧倒（相手はlog参照）{C['reset']}"))
     L.append(f"{C['cyan']}├{top}┤{C['reset']}")
     L.append(row(f" {C['dim']}log:{C['reset']} {st['last']}"))
     L.append(f"{C['cyan']}├{top}┤{C['reset']}")

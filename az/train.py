@@ -107,6 +107,44 @@ def eval_net_vs_greedy(net_ev, N, sims, games, rng):
     return w / games
 
 
+def rollout_evaluator(smart, rng):
+    """MCTS用の葉評価をロールアウトで（捕獲認識MCTSの中身）。priors=一様, value=プレイアウト勝敗。"""
+    def ev(s):
+        lm = E.legal_moves(s, s.turn)
+        pri = {m: 1.0 / len(lm) for m in lm} if lm else {}
+        who = s.turn; c = s.clone()
+        while c.turn != 0:
+            lm2 = E.legal_moves(c, c.turn)
+            if not lm2: break
+            if smart:
+                samp = lm2 if len(lm2) <= 12 else rng.sample(lm2, 12)
+                bg, bm = 0, None
+                for m in samp:
+                    g = E.capture_gain(c, m)
+                    if g > bg: bg, bm = g, m
+                mv = bm if bm is not None else rng.choice(lm2)
+            else:
+                mv = rng.choice(lm2)
+            E.play(c, mv, c.turn)
+        w = E.winner(c)
+        return pri, (0.0 if w == 0 else 1.0 if w == who else -1.0)
+    return ev
+
+
+def eval_net_vs(net_ev, opp_move, N, sims, games, rng):
+    """網-MCTS vs 任意の相手手関数。網の勝率を返す。"""
+    w = 0
+    for g in range(games):
+        seat = (g % 2) + 1; s = E.make_game(N, 2); cap = (N - 1) * (N - 1) * 4 + 60
+        while s.turn != 0:
+            mv = MC.pick_move(MC.search(s, net_ev, sims, rng=rng), 0.0, rng) if s.turn == seat else opp_move(s)
+            if mv < 0: break
+            E.play(s, mv, s.turn)
+            if s.moves > cap: break
+        if E.winner(s) == seat: w += 1
+    return w / games
+
+
 def parse():
     ap = argparse.ArgumentParser()
     ap.add_argument('--N', type=int, default=7)
@@ -126,6 +164,8 @@ def parse():
     ap.add_argument('--teacher-anneal', type=int, default=25)    # この round 数で 0.3→0.05 へ減衰（教師超えを許す）
     ap.add_argument('--eval-every', type=int, default=20)        # 評価頻度（ラウンド）
     ap.add_argument('--eval-games', type=int, default=4)
+    ap.add_argument('--eval-opp', choices=['greedy', 'champion'], default='champion')  # 評価相手。championは捕獲認識MCTS
+    ap.add_argument('--champ-sims', type=int, default=120)   # 評価相手(捕獲認識MCTS)の探索数。重いので控えめ
     ap.add_argument('--endgame-cells', type=int, default=9)      # 空きセル≤これで終盤ソルバ起動（0で無効）
     ap.add_argument('--endgame-nodes', type=int, default=60000)  # ソルバのノード予算（超で網に退避し詰まらせない）
     ap.add_argument('--shutdown', action='store_true')
@@ -186,10 +226,18 @@ def main():
             ps += float(ploss); vs += float(vloss)
         return ps / steps, vs / steps
 
+    if a.eval_opp == 'champion':
+        _champ_ev = rollout_evaluator(True, rng)
+        _opp = lambda s: MC.pick_move(MC.search(s, _champ_ev, a.champ_sims, rng=rng), 0.0, rng)
+        _opp_label = f'捕獲認識MCTS({a.champ_sims})'
+    else:
+        _opp = lambda s: BL.greedy_move(s, rng)
+        _opp_label = '捕獲貪欲'
+
     def do_eval(tag):
         net_cpu.load_state_dict(cpu_state())  # （ワーカ網も最新化）
-        wr = eval_net_vs_greedy(eval_ev, a.N, a.sims, 2 if a.smoke else a.eval_games, rng)
-        print(f'  [eval {tag}] 網-MCTS vs 捕獲貪欲 勝率 = {wr:.2f}', flush=True)
+        wr = eval_net_vs(eval_ev, _opp, a.N, a.sims, 2 if a.smoke else a.eval_games, rng)
+        print(f'  [eval {tag}] 網-MCTS vs {_opp_label} 勝率 = {wr:.2f}', flush=True)
 
     # 1) ウォームスタート（教師模倣）
     ts = teacher_samples(a.teacher, a.N)
