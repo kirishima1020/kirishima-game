@@ -52,6 +52,7 @@
     <label class="ctl" id="aiWrap">AI強さ
       <select id="iters"><option value="400">速い</option><option value="1000" selected>標準</option><option value="2500">強い</option></select>
     </label>
+    <label class="ctl" title="netserve.py を起動し、盤7×7・人数2で使う">網 <input type="checkbox" id="usenet"> 学習網と対局</label>
     <button id="start" class="primary">開始</button>
   </div>
   <div class="status">
@@ -116,6 +117,14 @@ function applyMove(id, isHuman){
 
 function scheduleAI(){
   aiThinking = true; updateStatus();
+  const un = document.getElementById('usenet');
+  if(un && un.checked){   // 学習網モード：ローカル netserve.py に手を問い合わせる
+    const body = JSON.stringify({N:s.N,P:s.P,turn:s.turn,moves:s.moves,H:[...s.H],V:[...s.V],cells:[...s.cells],first:[...s.first],score:[...s.score],sims:aiIters});
+    fetch('/move',{method:'POST',headers:{'Content-Type':'application/json'},body})
+      .then(r=>r.json()).then(d=>{ aiThinking=false; if(d.error){ alert('網: '+d.error); return; } applyMove(d.move, false); })
+      .catch(e=>{ aiThinking=false; alert('網サーバに繋がりません（python3 netserve.py を起動した？ http://localhost:8000/play.html で開いた？）\n'+e); });
+    return;
+  }
   setTimeout(()=>{ const mv = E.best(s, aiIters, true, false); aiThinking=false; applyMove(mv, false); }, 30);  // 30ms描画後に探索。捕獲認識ロールアウトMCTS・勝敗目標(ver2+)
 }
 

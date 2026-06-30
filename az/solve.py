@@ -92,6 +92,65 @@ def principal_variation(state):
     return s.score[1] - s.score[2]
 
 
+# ---- 3人 maxⁿ（各自が自分の最終得点を最大化。同点は手id最小） ----
+def solve_maxn(state, max_nodes=float('inf')):
+    if state.P != 3:
+        raise ValueError('3人戦用')
+    TT = {}
+    nodes = [0]
+
+    def fut(s):                       # s からの「追加得点ベクトル」(d1,d2,d3)。盤面だけで決まる。
+        if s.turn == 0:
+            return (0, 0, 0)
+        k = _key(s)
+        v = TT.get(k)
+        if v is not None:
+            return v
+        nodes[0] += 1
+        if nodes[0] > max_nodes:
+            raise BudgetError()
+        moves = E.legal_moves(s, s.turn)
+        if not moves:
+            ns = s.clone(); E.advance(ns)
+            v = (0, 0, 0) if ns.turn == s.turn else fut(ns)
+            TT[k] = v; return v
+        p = s.turn
+        best = None
+        for mid in moves:
+            ns = s.clone(); g = E.play(ns, mid, p)   # p が g マス捕獲
+            cv = fut(ns)
+            d = [cv[0], cv[1], cv[2]]; d[p - 1] += g
+            d = (d[0], d[1], d[2])
+            if best is None or d[p - 1] > best[p - 1]:   # 自得点最大・手id最小（strict>で先着優先）
+                best = d
+        TT[k] = best; return best
+
+    s = state.clone()
+    moves = E.legal_moves(s, s.turn); p = s.turn
+    best = None; move = -1
+    for mid in moves:
+        ns = s.clone(); g = E.play(ns, mid, p)
+        cv = fut(ns)
+        d = [cv[0], cv[1], cv[2]]; d[p - 1] += g; d = (d[0], d[1], d[2])
+        if move < 0 or d[p - 1] > best[p - 1]:
+            best = d; move = mid
+    value = (s.score[1] + best[0], s.score[2] + best[1], s.score[3] + best[2])
+    return {'value': value, 'move': move, 'nodes': nodes[0], 'tt': len(TT)}
+
+
+def endgame_value3(s, max_cells=9, max_nodes=2_000_000):
+    """3人・終盤なら (最終得点ベクトル, 最善手) を返す。範囲外/予算超過は None。学習の終盤ラベル用。"""
+    if s.P != 3 or s.turn == 0:
+        return None
+    if empty_cells(s) > max_cells:
+        return None
+    try:
+        r = solve_maxn(s, max_nodes)
+    except BudgetError:
+        return None
+    return (r['value'], r['move'])
+
+
 if __name__ == '__main__':
     import json, os
     g = E.make_game(3, 2)
@@ -99,6 +158,11 @@ if __name__ == '__main__':
     pv = principal_variation(g)
     print(f"検証1 N=3空盤: margin={r['margin']} (期待-2)  PV再生={pv}  "
           f"→ {'OK' if r['margin'] == -2 == pv else '不一致!!'}")
+
+    # 3人 maxⁿ：N=3 空盤の最終得点ベクトル（JS solve3.js は [2,1,1]）
+    r3 = solve_maxn(E.make_game(3, 3))
+    print(f"検証3 N=3・3人 maxⁿ: value={list(r3['value'])} (JS期待[2,1,1]) unique={r3['tt']}  "
+          f"→ {'OK・言語をまたいで一致' if list(r3['value']) == [2, 1, 1] else '不一致!!'}")
 
     # JS が吐いた終盤局面との突合（あれば）
     path = '/tmp/xpos.json'

@@ -11,7 +11,8 @@ import engine as E, mcts as MC, baseline as BL, model as MD
 
 ckpt = sys.argv[1] if len(sys.argv) > 1 else 'ckpt/net_latest.pt'
 N = int(sys.argv[2]) if len(sys.argv) > 2 else 7
-G = 20
+G = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+SIMS = [int(x) for x in sys.argv[4].split(',')] if len(sys.argv) > 4 else [50, 200, 800]
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 net = MD.Net(N).to(device)
@@ -56,5 +57,5 @@ print(f'ckpt={ckpt} N={N} G={G} device={device}')
 v0, v2 = value_sanity()
 print(f'価値: 空盤={v0:+.2f}(≒0が正常) / 数手後={v2:+.2f}')
 print(f'生policy(探索なし)  vs 貪欲: 勝率 {vs_greedy(pol_move):.2f}')
-for sims in (50, 200, 800):
+for sims in SIMS:
     print(f'網-MCTS sims={sims:<4} vs 貪欲: 勝率 {vs_greedy(lambda s, S=sims: MC.pick_move(MC.search(s, ev, S, rng=rng), 0.0, rng)):.2f}')
